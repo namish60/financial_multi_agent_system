@@ -1,0 +1,9 @@
+crewai
+langchain
+langchain-community
+langchain-core
+langchain_groq
+yfinance
+newsapi-python
+pandas
+python-dotenv
