@@ -1,6 +1,7 @@
 import os
 import requests
 import yfinance as yf
+import numpy as np
 from crewai.tools import tool
 from dotenv import load_dotenv
 
@@ -8,11 +9,13 @@ load_dotenv()
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
+
 @tool("fetch_stock_data")
 def fetch_stock_data(ticker: str = "NVDA"):
     """
-    Fetches historical price, market cap, P/E ratio, and revenue growth for a given stock ticker.
-    Default ticker is NVDA to avoid CrewAI tool validation errors.
+    Fetches financial metrics such as price, market cap, P/E ratio,
+    revenue growth, and EBITDA margins for a given stock ticker
+    using Yahoo Finance.
     """
     try:
         stock = yf.Ticker(ticker)
@@ -39,8 +42,9 @@ def fetch_stock_data(ticker: str = "NVDA"):
 @tool("fetch_news_and_sentiment")
 def fetch_news_and_sentiment(ticker: str = "NVDA"):
     """
-    Fetches 2 to 3 latest news headlines for a stock ticker using NewsAPI
-    and returns basic sentiment-ready text.
+    Fetches the latest news headlines for a stock ticker using NewsAPI
+    and returns sentiment-ready text data including titles,
+    descriptions, and sources.
     """
     try:
         url = "https://newsapi.org/v2/everything"
@@ -61,9 +65,9 @@ def fetch_news_and_sentiment(ticker: str = "NVDA"):
         articles = data.get("articles", [])
         headlines = [
             {
-                "title": a["title"],
-                "description": a["description"],
-                "source": a["source"]["name"]
+                "title": a.get("title"),
+                "description": a.get("description"),
+                "source": a.get("source", {}).get("name")
             }
             for a in articles
         ]
@@ -77,5 +81,39 @@ def fetch_news_and_sentiment(ticker: str = "NVDA"):
     except Exception as e:
         return {
             "error": f"Error fetching news for {ticker}",
+            "details": str(e)
+        }
+
+
+@tool("fetch_risk_metrics")
+def fetch_risk_metrics(ticker: str = "NVDA"):
+    """
+    Fetches quantitative risk metrics for a given stock ticker
+    including annualized volatility, beta, and maximum drawdown
+    using historical price data from Yahoo Finance.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1y")
+
+        returns = hist["Close"].pct_change().dropna()
+        volatility = np.std(returns) * np.sqrt(252)
+
+        info = stock.info
+        beta = info.get("beta")
+
+        rolling_max = hist["Close"].cummax()
+        drawdown = (hist["Close"] - rolling_max) / rolling_max
+        max_drawdown = drawdown.min()
+
+        return {
+            "volatility": round(float(volatility), 4),
+            "beta": beta,
+            "max_drawdown": round(float(max_drawdown), 4)
+        }
+
+    except Exception as e:
+        return {
+            "error": f"Error fetching risk data for {ticker}",
             "details": str(e)
         }

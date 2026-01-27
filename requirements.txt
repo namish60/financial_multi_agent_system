@@ -7,3 +7,4 @@ yfinance
 newsapi-python
 pandas
 python-dotenv
+rapidfuzz

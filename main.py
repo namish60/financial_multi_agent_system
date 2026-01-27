@@ -1,12 +1,12 @@
 import os
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, Process, LLM
-from tools import fetch_stock_data, fetch_news_and_sentiment
+from tools import fetch_stock_data, fetch_news_and_sentiment, fetch_risk_metrics
+from rapidfuzz import fuzz
 
-# 1. Load API Keys
 load_dotenv()
 
-# 2. Initialize the "Brain" (LLM) with Google Gemini
+# Initialize LLM
 llm = LLM(
     model="models/gemini-2.5-flash-lite",
     api_key=os.getenv("GOOGLE_API_KEY"),
@@ -15,65 +15,157 @@ llm = LLM(
     max_tokens=512
 )
 
-# 3. Define the Financial Analyst Agent
+# =========================
+# Agents
+# =========================
+
 fin_analyst = Agent(
     role='Senior Financial Analyst',
     goal='Analyze {ticker} stock performance and provide a summary of its financial health.',
-    backstory="""You are a seasoned Wall Street analyst. You excel at looking at 
-    fundamental ratios and market data to determine if a company is healthy or struggling.""",
+    backstory="""You are a seasoned Wall Street analyst focused on
+    company fundamentals and valuation metrics.""",
     tools=[fetch_stock_data],
     llm=llm,
     verbose=True,
     allow_delegation=False
 )
 
-# 4. Define the News & Sentiment Agent
 news_sentiment_analyst = Agent(
     role="Market News & Sentiment Analyst",
     goal="Analyze latest news for {ticker} and determine overall market sentiment.",
-    backstory="""You are a financial news expert who tracks market-moving headlines
-    and investor sentiment to assess how news may impact a stock.""",
+    backstory="""You track market-moving headlines and investor sentiment
+    to assess how news impacts stock prices.""",
     tools=[fetch_news_and_sentiment],
     llm=llm,
     verbose=True,
     allow_delegation=False
 )
 
-# 5. Define Tasks
+risk_analyst = Agent(
+    role="Risk Assessment Analyst",
+    goal="Assess market risk for {ticker} using volatility, beta, and drawdowns.",
+    backstory="""You are a quantitative risk analyst who evaluates
+    downside risk and stock stability.""",
+    tools=[fetch_risk_metrics],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False
+)
+
+# =========================
+# Tasks
+# =========================
 
 analysis_task = Task(
     description="""
-        Use the fetch_stock_data tool to get financial metrics for {ticker}.
+        Use fetch_stock_data to get financial metrics for {ticker}.
         Analyze the P/E ratio and revenue growth.
-        Compare them to general industry standards.
-        Provide a final summary of the company's financial state.
+        Provide a financial health summary.
     """,
-    expected_output="A 3-paragraph financial summary of the stock including key metrics and a health assessment.",
+    expected_output="A financial summary with key metrics and health assessment.",
     agent=fin_analyst
 )
 
 news_task = Task(
     description="""
-        Use the fetch_news_and_sentiment tool to get recent news for {ticker}.
-        Analyze the tone of headlines and descriptions.
-        Classify overall sentiment as Positive, Neutral, or Negative.
-        Summarize how news may impact the stock.
+        Use fetch_news_and_sentiment to get recent news for {ticker}.
+        Analyze sentiment and summarize impact on the stock.
     """,
-    expected_output="A sentiment report with key headlines and a sentiment classification.",
+    expected_output="A sentiment report with key headlines and classification.",
     agent=news_sentiment_analyst
 )
 
-# 6. The Orchestrator (The Crew)
+risk_task = Task(
+    description="""
+        Use fetch_risk_metrics to get volatility, beta, and max drawdown for {ticker}.
+        Interpret these metrics and classify overall risk as Low, Medium, or High.
+    """,
+    expected_output="A risk report with volatility, beta, drawdown, and risk classification.",
+    agent=risk_analyst
+)
+
+# =========================
+# Fuzzy Matching Utility
+# =========================
+
+def fuzzy_contains(query: str, keywords: list, threshold: int = 75) -> bool:
+    q = query.lower()
+    for kw in keywords:
+        score = fuzz.partial_ratio(q, kw.lower())
+        if score >= threshold:
+            return True
+    return False
+
+# =========================
+# Rule-Based + Fuzzy Orchestrator
+# =========================
+
+def orchestrate(user_query: str):
+    q = user_query.lower()
+
+    selected_agents = []
+    selected_tasks = []
+
+    # Intent keyword banks
+    financial_keywords = [
+        "financial", "fundamental", "valuation", "pe ratio",
+        "revenue", "growth", "earnings", "profit", "balance sheet"
+    ]
+
+    news_keywords = [
+        "news", "sentiment", "headline", "media",
+        "press", "story", "market buzz", "investor mood"
+    ]
+
+    risk_keywords = [
+        "risk", "volatile", "volatility", "drawdown",
+        "beta", "stability", "danger", "crash", "loss"
+    ]
+
+    # --- Financial intent ---
+    if fuzzy_contains(q, financial_keywords, threshold=70):
+        selected_agents.append(fin_analyst)
+        selected_tasks.append(analysis_task)
+
+    # --- News / Sentiment intent ---
+    if fuzzy_contains(q, news_keywords, threshold=70):
+        selected_agents.append(news_sentiment_analyst)
+        selected_tasks.append(news_task)
+
+    # --- Risk intent ---
+    if fuzzy_contains(q, risk_keywords, threshold=70):
+        selected_agents.append(risk_analyst)
+        selected_tasks.append(risk_task)
+
+    # --- Fallback: full analysis ---
+    if not selected_agents:
+        print("\n[Orchestrator] No clear intent detected → Running full analysis\n")
+        selected_agents = [fin_analyst, news_sentiment_analyst, risk_analyst]
+        selected_tasks = [analysis_task, news_task, risk_task]
+
+    return selected_agents, selected_tasks
+
+# =========================
+# Run System
+# =========================
+
+print("### Multi-Agent Financial Analysis System ###")
+
+user_query = input("\nAsk your financial question: ")
+input_ticker = input("Enter a company ticker: ")
+
+agents, tasks = orchestrate(user_query)
+
+print("\n[Orchestrator] Selected Agents:")
+for a in agents:
+    print(f" - {a.role}")
+
 financial_crew = Crew(
-    agents=[fin_analyst, news_sentiment_analyst],
-    tasks=[analysis_task, news_task],
+    agents=agents,
+    tasks=tasks,
     process=Process.sequential
 )
 
-# 7. Execute!
-print("### Starting the Financial + News Sentiment Analysis ###")
-
-input_ticker = input("enter a comapany ticker ")
 result = financial_crew.kickoff(inputs={'ticker': input_ticker})
 
 print("\n\n########################")
