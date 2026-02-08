@@ -126,9 +126,13 @@ import yfinance as yf
 import numpy as np
 from crewai.tools import tool
 from dotenv import load_dotenv
+from langchain_community.document_loaders import (
+    PyPDFLoader,
+    TextLoader,
+    CSVLoader
+)
 
 load_dotenv()
-
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
 
@@ -190,3 +194,26 @@ def fetch_risk_metrics(ticker: str):
         "beta": stock.info.get("beta"),
         "max_drawdown": round(float(drawdown.min()), 4),
     }
+
+
+@tool("read_uploaded_document")
+def read_uploaded_document(file_path: str):
+    """
+    Reads uploaded documents (PDF, TXT, CSV) for RAG-based question answering.
+    """
+    try:
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == ".pdf":
+            loader = PyPDFLoader(file_path)
+        elif ext == ".csv":
+            loader = CSVLoader(file_path)
+        else:
+            loader = TextLoader(file_path)
+
+        docs = loader.load()
+        content = "\n".join(d.page_content for d in docs)
+
+        return content[:4000]  # safe context size
+    except Exception as e:
+        return f"Error reading document: {str(e)}"
